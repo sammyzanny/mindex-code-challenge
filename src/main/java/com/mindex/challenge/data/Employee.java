@@ -79,4 +79,14 @@ public class Employee {
     public void setDirectReports(List<Employee> directReports) {
         this.directReports = directReports;
     }
+
+    @Override
+    public String toString() {
+        return "Employee{employeeId=" + employeeId
+                + ", firstName=" + firstName
+                + ", lastName=" + lastName
+                + ", position=" + position
+                + ", department=" + department
+                + ", directReports=" + (directReports == null ? 0 : directReports.size()) + "}";
+    }
 }

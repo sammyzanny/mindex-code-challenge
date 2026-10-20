@@ -21,5 +21,8 @@ dependencies {
     implementation 'de.bwaldvogel:mongo-java-server:1.44.0'
 
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
-    testImplementation 'junit:junit:4.13.1'
+}
+
+tasks.named('test') {
+    useJUnitPlatform()
 }

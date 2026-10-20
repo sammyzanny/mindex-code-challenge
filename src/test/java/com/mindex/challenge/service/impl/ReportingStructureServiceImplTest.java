@@ -3,9 +3,9 @@ package com.mindex.challenge.service.impl;
 import com.mindex.challenge.dao.EmployeeRepository;
 import com.mindex.challenge.data.Employee;
 import com.mindex.challenge.data.ReportingStructure;
-import org.junit.Before;
-import org.junit.Test;
-import org.junit.runner.RunWith;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.client.TestRestTemplate;
@@ -16,17 +16,16 @@ import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
-import org.springframework.test.context.junit4.SpringRunner;
 
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertNull;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 
-@RunWith(SpringRunner.class)
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 public class ReportingStructureServiceImplTest {
 
@@ -35,7 +34,7 @@ public class ReportingStructureServiceImplTest {
     private static final String RINGO_STARR_ID = "03aa1462-ffa9-4978-901b-7c001562cf6f";
 
     /** Upper bound for tests whose failure mode would otherwise be an endless traversal. */
-    private static final long TRAVERSAL_TIMEOUT_MS = 5_000;
+    private static final long TRAVERSAL_TIMEOUT_SECONDS = 5;
 
     private String employeeUrl;
     private String employeeIdUrl;
@@ -50,7 +49,7 @@ public class ReportingStructureServiceImplTest {
     @Autowired
     private TestRestTemplate restTemplate;
 
-    @Before
+    @BeforeEach
     public void setup() {
         employeeUrl = "http://localhost:" + port + "/employee";
         employeeIdUrl = "http://localhost:" + port + "/employee/{id}";
@@ -100,7 +99,8 @@ public class ReportingStructureServiceImplTest {
         assertEquals(3, readReportingStructure(top.getEmployeeId()).getNumberOfReports());
     }
 
-    @Test(timeout = TRAVERSAL_TIMEOUT_MS)
+    @Test
+    @Timeout(value = TRAVERSAL_TIMEOUT_SECONDS, unit = TimeUnit.SECONDS)
     public void testCycleTerminates() {
         // cycleA -> cycleB -> cycleA. Inserted through the repository because a mutual reference
         // needs both ids to exist before either document is written.
@@ -118,7 +118,8 @@ public class ReportingStructureServiceImplTest {
         assertEquals(1, readReportingStructure(cycleB.getEmployeeId()).getNumberOfReports());
     }
 
-    @Test(timeout = TRAVERSAL_TIMEOUT_MS)
+    @Test
+    @Timeout(value = TRAVERSAL_TIMEOUT_SECONDS, unit = TimeUnit.SECONDS)
     public void testSelfReferenceIsNotCounted() {
         Employee self = newEmployeeWithId("Self", "Reference");
         self.setDirectReports(Collections.singletonList(stub(self)));

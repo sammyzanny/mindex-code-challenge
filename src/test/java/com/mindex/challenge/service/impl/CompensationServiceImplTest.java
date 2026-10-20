@@ -1,34 +1,43 @@
 package com.mindex.challenge.service.impl;
 
+import com.mindex.challenge.dao.CompensationRepository;
 import com.mindex.challenge.data.Compensation;
+import com.mindex.challenge.data.CompensationHistory;
 import com.mindex.challenge.data.Employee;
-import org.junit.Before;
-import org.junit.Test;
-import org.junit.runner.RunWith;
+import org.bson.Document;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.client.TestRestTemplate;
 import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.dao.DuplicateKeyException;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.index.IndexInfo;
+import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
-import org.springframework.test.context.junit4.SpringRunner;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.Collections;
+import java.util.List;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertNull;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
-@RunWith(SpringRunner.class)
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 public class CompensationServiceImplTest {
 
-    private static final String JOHN_LENNON_ID = "16a596ae-edd3-4847-99fe-c4518e82c86f";
+    private static final String PAUL_MCCARTNEY_ID = "b7839309-3348-463b-a7e3-5de1c168beb3";
 
     private String employeeUrl;
     private String employeeIdUrl;
@@ -40,7 +49,13 @@ public class CompensationServiceImplTest {
     @Autowired
     private TestRestTemplate restTemplate;
 
-    @Before
+    @Autowired
+    private MongoTemplate mongoTemplate;
+
+    @Autowired
+    private CompensationRepository compensationRepository;
+
+    @BeforeEach
     public void setup() {
         employeeUrl = "http://localhost:" + port + "/employee";
         employeeIdUrl = "http://localhost:" + port + "/employee/{id}";
@@ -53,42 +68,50 @@ public class CompensationServiceImplTest {
 
         Compensation request = compensation("75000.50", LocalDate.of(2024, 1, 15));
 
-        // Create checks
+        // Create checks: a single record comes back with the employee attached and an id assigned
         ResponseEntity<Compensation> createResponse =
                 restTemplate.postForEntity(compensationIdUrl, request, Compensation.class, employee.getEmployeeId());
         assertEquals(HttpStatus.OK, createResponse.getStatusCode());
 
         Compensation created = createResponse.getBody();
         assertNotNull(created);
+        assertNotNull(created.getCompensationId());
         assertCompensationEquivalence(request, created);
         assertEmployeeEquivalence(employee, created.getEmployee());
 
-        // Read checks
-        Compensation[] read = readCompensation(employee.getEmployeeId());
-        assertEquals(1, read.length);
-        assertCompensationEquivalence(request, read[0]);
-        assertEmployeeEquivalence(employee, read[0].getEmployee());
+        // Read checks: the history carries the employee once and the record without it
+        CompensationHistory history = readHistory(employee.getEmployeeId());
+        assertEmployeeEquivalence(employee, history.getEmployee());
+        assertEquals(1, history.getCompensations().size());
+        assertCompensationEquivalence(request, history.getCompensations().get(0));
+        assertEquals(created.getCompensationId(), history.getCompensations().get(0).getCompensationId());
+        assertNull(history.getCompensations().get(0).getEmployee());
 
-        // The attached employee is the same shape the employee endpoint returns
+        // The employee on the history is the same shape the employee endpoint returns
         Employee fromEmployeeEndpoint =
                 restTemplate.getForEntity(employeeIdUrl, Employee.class, employee.getEmployeeId()).getBody();
         assertNotNull(fromEmployeeEndpoint);
-        assertEmployeeEquivalence(fromEmployeeEndpoint, read[0].getEmployee());
+        assertEmployeeEquivalence(fromEmployeeEndpoint, history.getEmployee());
     }
 
     @Test
-    public void testAttachedEmployeeReflectsCurrentEmployeeData() {
-        // Bootstrapped employee with direct reports: the attached employee carries them too
-        Compensation request = compensation("120000", LocalDate.of(2023, 6, 1));
-        restTemplate.postForEntity(compensationIdUrl, request, Compensation.class, JOHN_LENNON_ID);
+    public void testHistoryEmployeeReflectsCurrentEmployeeData() {
+        // A fresh manager with a direct report: the attached employee carries the report stub
+        Employee manager = new Employee();
+        manager.setFirstName("Comp");
+        manager.setLastName("Manager");
+        manager.setDirectReports(Collections.singletonList(Employee.fromEmployeeId(PAUL_MCCARTNEY_ID)));
+        manager = restTemplate.postForEntity(employeeUrl, manager, Employee.class).getBody();
+        assertNotNull(manager);
 
-        Compensation[] read = readCompensation(JOHN_LENNON_ID);
-        assertTrue(read.length >= 1);
+        restTemplate.postForEntity(compensationIdUrl, compensation("120000", LocalDate.of(2023, 6, 1)),
+                Compensation.class, manager.getEmployeeId());
 
-        Employee attached = read[0].getEmployee();
-        assertEquals("John", attached.getFirstName());
-        assertEquals("Lennon", attached.getLastName());
-        assertEquals(2, attached.getDirectReports().size());
+        CompensationHistory history = readHistory(manager.getEmployeeId());
+        assertEquals(1, history.getCompensations().size());
+        assertEquals("Comp", history.getEmployee().getFirstName());
+        assertEquals(1, history.getEmployee().getDirectReports().size());
+        assertEquals(PAUL_MCCARTNEY_ID, history.getEmployee().getDirectReports().get(0).getEmployeeId());
     }
 
     @Test
@@ -106,27 +129,44 @@ public class CompensationServiceImplTest {
             assertEquals(HttpStatus.OK, response.getStatusCode());
         }
 
-        Compensation[] read = readCompensation(employee.getEmployeeId());
+        List<Compensation> compensations = readHistory(employee.getEmployeeId()).getCompensations();
 
-        assertEquals(3, read.length);
-        assertCompensationEquivalence(newest, read[0]);
-        assertCompensationEquivalence(middle, read[1]);
-        assertCompensationEquivalence(oldest, read[2]);
-        for (Compensation compensation : read) {
-            assertEmployeeEquivalence(employee, compensation.getEmployee());
-        }
+        assertEquals(3, compensations.size());
+        assertCompensationEquivalence(newest, compensations.get(0));
+        assertCompensationEquivalence(middle, compensations.get(1));
+        assertCompensationEquivalence(oldest, compensations.get(2));
     }
 
     @Test
-    public void testEmployeeWithNoCompensationReturnsEmptyList() {
+    public void testDuplicateEffectiveDateIsRejectedWithConflict() {
+        Employee employee = createEmployee("Duplicate", "Date");
+        LocalDate date = LocalDate.of(2024, 5, 1);
+
+        ResponseEntity<Compensation> first =
+                restTemplate.postForEntity(compensationIdUrl, compensation("1000", date), Compensation.class, employee.getEmployeeId());
+        assertEquals(HttpStatus.OK, first.getStatusCode());
+
+        ResponseEntity<String> second =
+                restTemplate.postForEntity(compensationIdUrl, compensation("2000", date), String.class, employee.getEmployeeId());
+        assertEquals(HttpStatus.CONFLICT, second.getStatusCode());
+        assertNotNull(second.getBody());
+        assertTrue(second.getBody().contains("already has a compensation record effective 2024-05-01"), second.getBody());
+
+        // only the first record survived, with its original salary
+        List<Compensation> compensations = readHistory(employee.getEmployeeId()).getCompensations();
+        assertEquals(1, compensations.size());
+        assertEquals(0, new BigDecimal("1000").compareTo(compensations.get(0).getSalary()));
+    }
+
+    @Test
+    public void testEmployeeWithNoCompensationReturnsEmptyHistory() {
         Employee employee = createEmployee("No", "Compensation");
 
-        ResponseEntity<Compensation[]> response =
-                restTemplate.getForEntity(compensationIdUrl, Compensation[].class, employee.getEmployeeId());
+        CompensationHistory history = readHistory(employee.getEmployeeId());
 
-        assertEquals(HttpStatus.OK, response.getStatusCode());
-        assertNotNull(response.getBody());
-        assertEquals(0, response.getBody().length);
+        assertEmployeeEquivalence(employee, history.getEmployee());
+        assertNotNull(history.getCompensations());
+        assertEquals(0, history.getCompensations().size());
     }
 
     @Test
@@ -143,78 +183,138 @@ public class CompensationServiceImplTest {
     }
 
     @Test
-    public void testMissingSalaryIsRejected() {
+    public void testMissingSalaryIsRejectedWithMessage() {
         Employee employee = createEmployee("Missing", "Salary");
 
         Compensation request = new Compensation();
         request.setEffectiveDate(LocalDate.of(2024, 1, 1));
 
-        assertRejectedAndNothingStored(employee, request);
+        assertRejectedAndNothingStored(employee, request, "salary is required");
     }
 
     @Test
-    public void testMissingEffectiveDateIsRejected() {
+    public void testMissingEffectiveDateIsRejectedWithMessage() {
         Employee employee = createEmployee("Missing", "Date");
 
         Compensation request = new Compensation();
         request.setSalary(new BigDecimal("1000"));
 
-        assertRejectedAndNothingStored(employee, request);
+        assertRejectedAndNothingStored(employee, request, "effectiveDate is required");
     }
 
     @Test
-    public void testNegativeSalaryIsRejected() {
+    public void testNegativeSalaryIsRejectedWithMessage() {
         Employee employee = createEmployee("Negative", "Salary");
 
-        assertRejectedAndNothingStored(employee, compensation("-1", LocalDate.of(2024, 1, 1)));
+        assertRejectedAndNothingStored(employee, compensation("-1", LocalDate.of(2024, 1, 1)), "must not be negative");
     }
 
     @Test
     public void testMalformedDateIsRejected() {
         Employee employee = createEmployee("Bad", "Date");
 
-        HttpHeaders headers = new HttpHeaders();
-        headers.setContentType(MediaType.APPLICATION_JSON);
-        String payload = "{\"salary\": 1000, \"effectiveDate\": \"not-a-date\"}";
-
-        ResponseEntity<String> response = restTemplate.postForEntity(compensationIdUrl,
-                new HttpEntity<>(payload, headers), String.class, employee.getEmployeeId());
+        ResponseEntity<String> response = postJson("{\"salary\": 1000, \"effectiveDate\": \"not-a-date\"}", employee.getEmployeeId());
 
         assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
-        assertEquals(0, readCompensation(employee.getEmployeeId()).length);
+        assertEquals(0, readHistory(employee.getEmployeeId()).getCompensations().size());
     }
 
     @Test
     public void testEmployeeIdInBodyIsIgnoredInFavourOfUrl() {
         Employee employee = createEmployee("Url", "Wins");
 
-        HttpHeaders headers = new HttpHeaders();
-        headers.setContentType(MediaType.APPLICATION_JSON);
-        String payload = "{\"employeeId\": \"" + JOHN_LENNON_ID + "\", \"salary\": 1000, \"effectiveDate\": \"2024-01-01\"}";
-
-        ResponseEntity<Compensation> response = restTemplate.postForEntity(compensationIdUrl,
-                new HttpEntity<>(payload, headers), Compensation.class, employee.getEmployeeId());
+        ResponseEntity<String> response = postJson(
+                "{\"employeeId\": \"" + PAUL_MCCARTNEY_ID + "\", \"salary\": 1000, \"effectiveDate\": \"2024-01-01\"}",
+                employee.getEmployeeId());
 
         assertEquals(HttpStatus.OK, response.getStatusCode());
-        assertNotNull(response.getBody());
-        assertEquals(employee.getEmployeeId(), response.getBody().getEmployee().getEmployeeId());
-        assertEquals(1, readCompensation(employee.getEmployeeId()).length);
+        assertEquals(1, readHistory(employee.getEmployeeId()).getCompensations().size());
+        assertEquals(0, readHistory(PAUL_MCCARTNEY_ID).getCompensations().size());
     }
 
-    private void assertRejectedAndNothingStored(Employee employee, Compensation request) {
+    @Test
+    public void testConflictingEmployeeInBodyIsRejected() {
+        Employee employee = createEmployee("Body", "Conflict");
+
+        ResponseEntity<String> response = postJson(
+                "{\"employee\": {\"employeeId\": \"" + PAUL_MCCARTNEY_ID + "\"}, \"salary\": 1000, \"effectiveDate\": \"2024-01-01\"}",
+                employee.getEmployeeId());
+
+        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+        assertNotNull(response.getBody());
+        assertTrue(response.getBody().contains("does not match the employeeId in the URL"), response.getBody());
+        assertEquals(0, readHistory(employee.getEmployeeId()).getCompensations().size());
+    }
+
+    @Test
+    public void testUniqueIndexGuardsAgainstRacingDuplicates() {
+        // The service checks for a duplicate before inserting, but two concurrent requests can
+        // both pass that check. The unique index is the real guard, so prove it exists and bites
+        // by bypassing the service and writing straight to the repository.
+        Employee employee = createEmployee("Index", "Guard");
+        LocalDate date = LocalDate.of(2024, 7, 1);
+
+        Compensation first = compensation("1", date);
+        first.setEmployeeId(employee.getEmployeeId());
+        Compensation second = compensation("2", date);
+        second.setEmployeeId(employee.getEmployeeId());
+
+        compensationRepository.insert(first);
+        assertThrows(DuplicateKeyException.class, () -> compensationRepository.insert(second));
+
+        IndexInfo index = mongoTemplate.indexOps("compensation").getIndexInfo().stream()
+                .filter(info -> "employee_effective_date".equals(info.getName()))
+                .findFirst()
+                .orElse(null);
+        assertNotNull(index, "unique compound index was not created");
+        assertTrue(index.isUnique());
+        assertEquals(1, readHistory(employee.getEmployeeId()).getCompensations().size());
+    }
+
+    @Test
+    public void testStoredDocumentShape() {
+        // Pins the persistence decisions: date as a zone-free ISO string, salary as an exact
+        // string, the link as employeeId only, and no embedded employee.
+        Employee employee = createEmployee("Stored", "Shape");
+        restTemplate.postForEntity(compensationIdUrl, compensation("75000.123456789", LocalDate.of(2024, 3, 10)),
+                Compensation.class, employee.getEmployeeId());
+
+        List<Document> documents = mongoTemplate.find(
+                Query.query(Criteria.where("employeeId").is(employee.getEmployeeId())), Document.class, "compensation");
+
+        assertEquals(1, documents.size());
+        Document document = documents.get(0);
+        assertEquals("2024-03-10", document.get("effectiveDate"));
+        assertEquals("75000.123456789", document.get("salary"));
+        assertEquals(employee.getEmployeeId(), document.get("employeeId"));
+        assertNotNull(document.get("_id"));
+        assertFalse(document.containsKey("employee"));
+    }
+
+    private void assertRejectedAndNothingStored(Employee employee, Compensation request, String expectedMessage) {
         ResponseEntity<String> response =
                 restTemplate.postForEntity(compensationIdUrl, request, String.class, employee.getEmployeeId());
 
         assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
-        assertEquals(0, readCompensation(employee.getEmployeeId()).length);
+        assertNotNull(response.getBody());
+        assertTrue(response.getBody().contains(expectedMessage), response.getBody());
+        assertEquals(0, readHistory(employee.getEmployeeId()).getCompensations().size());
     }
 
-    private Compensation[] readCompensation(String employeeId) {
-        ResponseEntity<Compensation[]> response =
-                restTemplate.getForEntity(compensationIdUrl, Compensation[].class, employeeId);
+    private ResponseEntity<String> postJson(String payload, String employeeId) {
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        return restTemplate.postForEntity(compensationIdUrl, new HttpEntity<>(payload, headers), String.class, employeeId);
+    }
+
+    private CompensationHistory readHistory(String employeeId) {
+        ResponseEntity<CompensationHistory> response =
+                restTemplate.getForEntity(compensationIdUrl, CompensationHistory.class, employeeId);
 
         assertEquals(HttpStatus.OK, response.getStatusCode());
         assertNotNull(response.getBody());
+        assertNotNull(response.getBody().getEmployee());
+        assertNotNull(response.getBody().getCompensations());
 
         return response.getBody();
     }

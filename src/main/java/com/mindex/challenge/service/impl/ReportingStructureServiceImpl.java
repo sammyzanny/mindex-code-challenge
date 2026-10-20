@@ -7,7 +7,6 @@ import com.mindex.challenge.service.EmployeeService;
 import com.mindex.challenge.service.ReportingStructureService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.util.Collections;
@@ -21,11 +20,13 @@ public class ReportingStructureServiceImpl implements ReportingStructureService 
 
     private static final Logger LOG = LoggerFactory.getLogger(ReportingStructureServiceImpl.class);
 
-    @Autowired
-    private EmployeeService employeeService;
+    private final EmployeeService employeeService;
+    private final EmployeeRepository employeeRepository;
 
-    @Autowired
-    private EmployeeRepository employeeRepository;
+    public ReportingStructureServiceImpl(EmployeeService employeeService, EmployeeRepository employeeRepository) {
+        this.employeeService = employeeService;
+        this.employeeRepository = employeeRepository;
+    }
 
     @Override
     public ReportingStructure read(String id) {
