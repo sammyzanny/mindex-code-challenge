@@ -2,6 +2,7 @@ package com.mindex.challenge.service.impl;
 
 import com.mindex.challenge.dao.EmployeeRepository;
 import com.mindex.challenge.data.Employee;
+import com.mindex.challenge.exception.EmployeeNotFoundException;
 import com.mindex.challenge.service.EmployeeService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -29,12 +30,12 @@ public class EmployeeServiceImpl implements EmployeeService {
 
     @Override
     public Employee read(String id) {
-        LOG.debug("Creating employee with id [{}]", id);
+        LOG.debug("Reading employee with id [{}]", id);
 
         Employee employee = employeeRepository.findByEmployeeId(id);
 
         if (employee == null) {
-            throw new RuntimeException("Invalid employeeId: " + id);
+            throw new EmployeeNotFoundException(id);
         }
 
         return employee;
@@ -43,6 +44,9 @@ public class EmployeeServiceImpl implements EmployeeService {
     @Override
     public Employee update(Employee employee) {
         LOG.debug("Updating employee [{}]", employee);
+
+        // An update of an unknown id is a client error, not an implicit create.
+        read(employee.getEmployeeId());
 
         return employeeRepository.save(employee);
     }

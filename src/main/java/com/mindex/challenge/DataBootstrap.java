@@ -9,6 +9,7 @@ import org.springframework.stereotype.Component;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.UncheckedIOException;
 
 @Component
 public class DataBootstrap {
@@ -22,14 +23,15 @@ public class DataBootstrap {
 
     @PostConstruct
     public void init() {
-        InputStream inputStream = this.getClass().getResourceAsStream(DATASTORE_LOCATION);
+        Employee[] employees;
 
-        Employee[] employees = null;
-
-        try {
+        try (InputStream inputStream = this.getClass().getResourceAsStream(DATASTORE_LOCATION)) {
+            if (inputStream == null) {
+                throw new IllegalStateException("Bootstrap data not found on classpath: " + DATASTORE_LOCATION);
+            }
             employees = objectMapper.readValue(inputStream, Employee[].class);
         } catch (IOException e) {
-            throw new RuntimeException(e);
+            throw new UncheckedIOException("Could not read bootstrap data from " + DATASTORE_LOCATION, e);
         }
 
         for (Employee employee : employees) {

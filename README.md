@@ -28,7 +28,13 @@ The following endpoints are available to use:
     * URL: localhost:8080/employee/{id}
     * PAYLOAD: Employee
     * RESPONSE: Employee
+* REPORTING STRUCTURE
+    * HTTP Method: GET
+    * URL: localhost:8080/reportingStructure/{id}
+    * RESPONSE: ReportingStructure (computed on request, never persisted)
 ```
+
+Requests for an `employeeId` that does not exist return HTTP 404.
 
 The Employee has a JSON schema of:
 ```json

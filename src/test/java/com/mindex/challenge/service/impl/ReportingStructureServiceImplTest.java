@@ -10,6 +10,11 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.client.TestRestTemplate;
 import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.test.context.junit4.SpringRunner;
 
@@ -20,7 +25,6 @@ import java.util.UUID;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
-import static org.junit.Assert.assertTrue;
 
 @RunWith(SpringRunner.class)
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
@@ -29,6 +33,9 @@ public class ReportingStructureServiceImplTest {
     private static final String JOHN_LENNON_ID = "16a596ae-edd3-4847-99fe-c4518e82c86f";
     private static final String PAUL_MCCARTNEY_ID = "b7839309-3348-463b-a7e3-5de1c168beb3";
     private static final String RINGO_STARR_ID = "03aa1462-ffa9-4978-901b-7c001562cf6f";
+
+    /** Upper bound for tests whose failure mode would otherwise be an endless traversal. */
+    private static final long TRAVERSAL_TIMEOUT_MS = 5_000;
 
     private String employeeUrl;
     private String employeeIdUrl;
@@ -93,19 +100,12 @@ public class ReportingStructureServiceImplTest {
         assertEquals(3, readReportingStructure(top.getEmployeeId()).getNumberOfReports());
     }
 
-    @Test
+    @Test(timeout = TRAVERSAL_TIMEOUT_MS)
     public void testCycleTerminates() {
         // cycleA -> cycleB -> cycleA. Inserted through the repository because a mutual reference
         // needs both ids to exist before either document is written.
-        Employee cycleA = new Employee();
-        cycleA.setEmployeeId(UUID.randomUUID().toString());
-        cycleA.setFirstName("Cycle");
-        cycleA.setLastName("A");
-
-        Employee cycleB = new Employee();
-        cycleB.setEmployeeId(UUID.randomUUID().toString());
-        cycleB.setFirstName("Cycle");
-        cycleB.setLastName("B");
+        Employee cycleA = newEmployeeWithId("Cycle", "A");
+        Employee cycleB = newEmployeeWithId("Cycle", "B");
 
         cycleA.setDirectReports(Collections.singletonList(stub(cycleB)));
         cycleB.setDirectReports(Collections.singletonList(stub(cycleA)));
@@ -118,13 +118,62 @@ public class ReportingStructureServiceImplTest {
         assertEquals(1, readReportingStructure(cycleB.getEmployeeId()).getNumberOfReports());
     }
 
+    @Test(timeout = TRAVERSAL_TIMEOUT_MS)
+    public void testSelfReferenceIsNotCounted() {
+        Employee self = newEmployeeWithId("Self", "Reference");
+        self.setDirectReports(Collections.singletonList(stub(self)));
+        employeeRepository.insert(self);
+
+        assertEquals(0, readReportingStructure(self.getEmployeeId()).getNumberOfReports());
+    }
+
     @Test
-    public void testUnknownEmployeeId() {
+    public void testDanglingReportIsCountedAndBlankIdsAreIgnored() {
+        Employee dangling = new Employee();
+        dangling.setEmployeeId(UUID.randomUUID().toString()); // never stored
+
+        Employee blank = new Employee();
+        blank.setEmployeeId("");
+
+        Employee noId = new Employee();
+        noId.setFirstName("no id at all");
+
+        Employee manager = new Employee();
+        manager.setFirstName("Dangling");
+        manager.setLastName("Manager");
+        manager.setDirectReports(Arrays.asList(dangling, blank, null, noId, stub(paulMcCartney())));
+
+        Employee created = restTemplate.postForEntity(employeeUrl, manager, Employee.class).getBody();
+        assertNotNull(created);
+
+        // the dangling id and Paul count; the blank, null and id-less entries do not
+        assertEquals(2, readReportingStructure(created.getEmployeeId()).getNumberOfReports());
+    }
+
+    @Test
+    public void testUnknownEmployeeIdReturnsNotFound() {
         ResponseEntity<String> response =
                 restTemplate.getForEntity(reportingStructureIdUrl, String.class, "does-not-exist");
 
-        assertTrue("expected an error status, got " + response.getStatusCode(),
-                response.getStatusCode().isError());
+        assertEquals(HttpStatus.NOT_FOUND, response.getStatusCode());
+    }
+
+    @Test
+    public void testStructureSurvivesUpdateOfAReport() {
+        // Regression: an update used to insert a second document with the same employeeId,
+        // which made every lookup of that employee, and of every manager above it, fail.
+        Employee ringo = restTemplate.getForEntity(employeeIdUrl, Employee.class, RINGO_STARR_ID).getBody();
+        assertNotNull(ringo);
+        ringo.setPosition("Developer VI");
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        ResponseEntity<Employee> updateResponse = restTemplate.exchange(employeeIdUrl, HttpMethod.PUT,
+                new HttpEntity<>(ringo, headers), Employee.class, RINGO_STARR_ID);
+        assertEquals(HttpStatus.OK, updateResponse.getStatusCode());
+
+        assertEquals(2, readReportingStructure(RINGO_STARR_ID).getNumberOfReports());
+        assertEquals(4, readReportingStructure(JOHN_LENNON_ID).getNumberOfReports());
     }
 
     @Test
@@ -183,11 +232,21 @@ public class ReportingStructureServiceImplTest {
         return created;
     }
 
+    private static Employee newEmployeeWithId(String firstName, String lastName) {
+        Employee employee = new Employee();
+        employee.setEmployeeId(UUID.randomUUID().toString());
+        employee.setFirstName(firstName);
+        employee.setLastName(lastName);
+        return employee;
+    }
+
+    private static Employee paulMcCartney() {
+        return Employee.fromEmployeeId(PAUL_MCCARTNEY_ID);
+    }
+
     /** Mirrors how directReports are stored: an Employee carrying only the employeeId. */
     private static Employee stub(Employee employee) {
-        Employee stub = new Employee();
-        stub.setEmployeeId(employee.getEmployeeId());
-        return stub;
+        return Employee.fromEmployeeId(employee.getEmployeeId());
     }
 
     private static void assertEmployeeEquivalence(Employee expected, Employee actual) {
