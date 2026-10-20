@@ -28,7 +28,26 @@ The following endpoints are available to use:
     * URL: localhost:8080/employee/{id}
     * PAYLOAD: Employee
     * RESPONSE: Employee
+* REPORTING STRUCTURE
+    * HTTP Method: GET
+    * URL: localhost:8080/reportingStructure/{id}
+    * RESPONSE: ReportingStructure (computed on request, never persisted)
+* CREATE COMPENSATION
+    * HTTP Method: POST
+    * URL: localhost:8080/compensation/{id}
+    * PAYLOAD: Compensation (salary, effectiveDate; the employee comes from the URL)
+    * RESPONSE: Compensation with the full Employee attached and a database-assigned compensationId
+* READ COMPENSATION
+    * HTTP Method: GET
+    * URL: localhost:8080/compensation/{id}
+    * RESPONSE: CompensationHistory: the Employee once, plus every Compensation for them,
+      most recent effectiveDate first (an empty list if there are none)
 ```
+
+Requests for an `employeeId` that does not exist return HTTP 404.
+A compensation request with a missing or negative `salary`, or a missing or unparsable `effectiveDate`, returns HTTP 400.
+A compensation request for an `effectiveDate` the employee already has a record for returns HTTP 409.
+Error responses carry a `message` field saying why the request was rejected.
 
 The Employee has a JSON schema of:
 ```json
@@ -68,6 +87,33 @@ The Employee has a JSON schema of:
 }
 ```
 For all endpoints that require an `id` in the URL, this is the `employeeId` field.
+
+The Compensation has a JSON schema of:
+```json
+{
+  "title": "Compensation",
+  "type": "object",
+  "properties": {
+    "compensationId": { "type": "string", "readOnly": true },
+    "employee": { "$ref": "Employee" },
+    "salary": { "type": "number" },
+    "effectiveDate": { "type": "string", "format": "date" }
+  },
+  "required": ["salary", "effectiveDate"]
+}
+```
+
+The CompensationHistory returned by the read endpoint has a JSON schema of:
+```json
+{
+  "title": "CompensationHistory",
+  "type": "object",
+  "properties": {
+    "employee": { "$ref": "Employee" },
+    "compensations": { "type": "array", "items": { "$ref": "Compensation" } }
+  }
+}
+```
 
 ## What to Implement
 This coding challenge was designed to allow for flexibility in the approaches you take. While the requirements are 

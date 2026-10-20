@@ -5,12 +5,19 @@ import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
 import de.bwaldvogel.mongo.MongoServer;
 import de.bwaldvogel.mongo.backend.memory.MemoryBackend;
+import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.convert.converter.Converter;
+import org.springframework.data.convert.ReadingConverter;
+import org.springframework.data.convert.WritingConverter;
 import org.springframework.data.mongodb.config.AbstractMongoClientConfiguration;
+import org.springframework.data.mongodb.core.convert.MongoCustomConversions;
 import org.springframework.data.mongodb.repository.config.EnableMongoRepositories;
 import org.springframework.lang.NonNull;
 
 import java.net.InetSocketAddress;
+import java.time.LocalDate;
+import java.util.List;
 
 @EnableMongoRepositories(basePackageClasses = EmployeeRepository.class)
 @Configuration
@@ -22,14 +29,62 @@ public class MongoConfig extends AbstractMongoClientConfiguration {
         return "test";
     }
 
+    /**
+     * Spring Boot's {@code spring.data.mongodb.auto-index-creation} property does not reach a
+     * custom {@link AbstractMongoClientConfiguration}; the flag has to be set here. Without it the
+     * unique index declared on Compensation is silently never created.
+     */
+    @Override
+    protected boolean autoIndexCreation() {
+        return true;
+    }
+
+    /**
+     * The embedded server is a bean of its own so Spring shuts it down with the context,
+     * releasing its port and threads instead of leaving them until the JVM exits.
+     */
+    @Bean(destroyMethod = "shutdown")
+    public MongoServer mongoServer() {
+        return new MongoServer(new MemoryBackend());
+    }
+
     @Override
     @NonNull
     public MongoClient mongoClient() {
-        MongoServer server = new MongoServer(new MemoryBackend());
-        InetSocketAddress serverAddress = server.bind();
+        InetSocketAddress serverAddress = mongoServer().bind();
         String mongoConnectionString = String.format("mongodb://%s:%d", serverAddress.getHostName(), serverAddress.getPort());
         return MongoClients.create(mongoConnectionString);
     }
+
+    /**
+     * Store {@link LocalDate} as an ISO-8601 string ({@code 2024-03-10}) rather than the default
+     * {@code Date} at local midnight. The default depends on the JVM's time zone in both
+     * directions, so a reader in a zone west of the writer sees the previous day. An ISO string
+     * has no zone, and it still sorts chronologically.
+     */
+    @Override
+    @NonNull
+    public MongoCustomConversions customConversions() {
+        return new MongoCustomConversions(List.of(LocalDateToStringConverter.INSTANCE, StringToLocalDateConverter.INSTANCE));
+    }
+
+    @WritingConverter
+    enum LocalDateToStringConverter implements Converter<LocalDate, String> {
+        INSTANCE;
+
+        @Override
+        public String convert(@NonNull LocalDate source) {
+            return source.toString();
+        }
+    }
+
+    @ReadingConverter
+    enum StringToLocalDateConverter implements Converter<String, LocalDate> {
+        INSTANCE;
+
+        @Override
+        public LocalDate convert(@NonNull String source) {
+            return LocalDate.parse(source);
+        }
+    }
 }
-
-
