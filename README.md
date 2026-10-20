@@ -32,9 +32,33 @@ The following endpoints are available to use:
     * HTTP Method: GET
     * URL: localhost:8080/reportingStructure/{id}
     * RESPONSE: ReportingStructure (computed on request, never persisted)
+* CREATE COMPENSATION
+    * HTTP Method: POST
+    * URL: localhost:8080/compensation/{id}
+    * PAYLOAD: Compensation (salary, effectiveDate; the employee comes from the URL)
+    * RESPONSE: Compensation with the full Employee attached
+* READ COMPENSATION
+    * HTTP Method: GET
+    * URL: localhost:8080/compensation/{id}
+    * RESPONSE: Compensation[] for that employee, most recent effectiveDate first (empty if none)
 ```
 
 Requests for an `employeeId` that does not exist return HTTP 404.
+A compensation request with a missing or negative `salary`, or a missing or unparsable `effectiveDate`, returns HTTP 400.
+
+The Compensation has a JSON schema of:
+```json
+{
+  "title": "Compensation",
+  "type": "object",
+  "properties": {
+    "employee": { "$ref": "Employee" },
+    "salary": { "type": "number" },
+    "effectiveDate": { "type": "string", "format": "date" }
+  },
+  "required": ["salary", "effectiveDate"]
+}
+```
 
 The Employee has a JSON schema of:
 ```json
